@@ -1,31 +1,50 @@
-from fastapi import FastAPI
-from backend.game_logic import gamble, get_leaderboard
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+import hashlib
+import hmac
+import time
 
-# Initialisation de l'application FastAPI
 app = FastAPI()
 
-# Autoriser le CORS pour permettre les requêtes du frontend (Mini App Telegram)
+# Autoriser le CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:8080"],  # Autoriser uniquement le frontend
+    allow_origins=["*"],  
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+TELEGRAM_BOT_TOKEN = "7639397685:AAGfgiGl1ynZ8ys9HSfbI9VrbkbhJN1bUgk"  # Remplace avec ton token de @BotFather
+
 @app.get("/")
 def read_root():
     return {"message": "GAMBLE ARENA API is running"}
 
-@app.post("/play/")
-def play_game(user_id: int, bet_amount: int):
-    return gamble(user_id, bet_amount)
+@app.get("/auth")
+async def auth(request: Request):
+    query_params = dict(request.query_params)
+    
+    # Vérifier si Telegram a envoyé les bons paramètres
+    if not query_params or "hash" not in query_params:
+        return {"error": "Invalid request"}
 
-@app.get("/leaderboard/")
-def leaderboard():
-    return get_leaderboard()
+    # Trier les paramètres comme demandé par Telegram
+    auth_data = "\n".join(f"{k}={v}" for k, v in sorted(query_params.items()) if k != "hash")
+    secret_key = hashlib.sha256(TELEGRAM_BOT_TOKEN.encode()).digest()
+    check_hash = hmac.new(secret_key, auth_data.encode(), hashlib.sha256).hexdigest()
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Vérifier si la requête vient bien de Telegram
+    if check_hash != query_params["hash"]:
+        return {"error": "Invalid hash"}
+
+    # Vérifier si la requête est récente (éviter les attaques)
+    auth_time = int(query_params.get("auth_date", 0))
+    if time.time() - auth_time > 86400:  # Plus de 24h
+        return {"error": "Request too old"}
+
+    return {
+        "user_id": query_params.get("id"),
+        "username": query_params.get("username"),
+        "first_name": query_params.get("first_name"),
+    }
